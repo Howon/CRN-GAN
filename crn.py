@@ -39,7 +39,6 @@ class NType(Enum):
 	C = 0
 	P = 1
 
-
 def build_net(ntype, nin, idx=-1, name=None):
 	if ntype == NType.C:
 		conv = tf.nn.conv2d(input=nin, filter=vgg_weights[idx],
@@ -56,7 +55,6 @@ def build_vgg19(inputs, reuse=False):
 		tf.get_variable_scope().reuse_variables()
 
 	net = {}
-
 	net['input'] = inputs - \
 		np.array([123.6800, 116.7790, 103.9390]).reshape((1, 1, 1, 3))
 	net['conv1_1'] = build_net(NType.C, net['input'], 0, name='vgg_conv1_1')
@@ -141,12 +139,13 @@ with tf.variable_scope(tf.get_variable_scope()):
 
 	generator = recursive_generator(semantics, GEN_RES)
 
+	tf.summary.image(name="Generated", tensor=generator,
+					 max_outputs=generator.shape[0])
+	tf.summary.image(name="Real", tensor=real_image)
+
 	vgg_real = build_vgg19(real_image)
 	vgg_fake = build_vgg19(generator, reuse=True)
 
-	# tf.summary.image(name="Generated", tensor=generator)
-	# tf.summary.image(name="Real", tensor=real_image)
-    #
 	p0 = error(vgg_real['input'], vgg_fake['input'], semantics)
 	p1 = error(vgg_real['conv1_2'], vgg_fake['conv1_2'], semantics) / 1.6
 
@@ -164,27 +163,29 @@ with tf.variable_scope(tf.get_variable_scope()):
 
 	content_loss = p0 + p1 + p2 + p3 + p4 + p5
 	loss_min = tf.reduce_min(content_loss, reduction_indices=0)
-	g_loss = tf.reduce_sum(tf.reduce_min(content_loss,reduction_indices=0))
+	loss_mean = tf.reduce_mean(content_loss, reduction_indices=0)
+	g_loss = tf.reduce_sum(loss_min) * 0.999 + tf.reduce_sum(loss_mean) * 0.001
 
-	# tf.summary.scalar("P0", tf.reduce_mean(p0))
-	# tf.summary.scalar("P1", tf.reduce_mean(p1))
-	# tf.summary.scalar("P2", tf.reduce_mean(p2))
-	# tf.summary.scalar("P3", tf.reduce_mean(p3))
-	# tf.summary.scalar("P4", tf.reduce_mean(p4))
-	# tf.summary.scalar("P5", tf.reduce_mean(p5))
-    #
-	# tf.summary.scalar("MinLoss", tf.reduce_mean(loss_min))
-	# tf.summary.scalar("Loss", g_loss)
-    #
+	tf.summary.scalar("P0", tf.reduce_mean(p0))
+	tf.summary.scalar("P1", tf.reduce_mean(p1))
+	tf.summary.scalar("P2", tf.reduce_mean(p2))
+	tf.summary.scalar("P3", tf.reduce_mean(p3))
+	tf.summary.scalar("P4", tf.reduce_mean(p4))
+	tf.summary.scalar("P5", tf.reduce_mean(p5))
+
+	tf.summary.scalar("Loss", g_loss)
+
 lr = tf.placeholder(tf.float32)
 var_list = [v for v in tf.trainable_variables() if v.name.startswith('g_')]
 
 optimizer = tf.train.AdamOptimizer(learning_rate=lr)
-g_opt = optimizer.minimize(g_loss, var_list=var_list)
+tf.summary.scalar("LearningRate", optimizer._lr)
+g_opt = optimizer.minimize(g_loss, var_list=var_list,
+						   global_step=tf.train.get_global_step())
 saver = tf.train.Saver(max_to_keep=1000)
-#summary = tf.summary.merge_all()
-#summary_writer = tf.summary.FileWriter(join(RESULT, "tensorboard"), sess.graph)
 sess.run(tf.global_variables_initializer())
+summary = tf.summary.merge_all()
+summary_writer = tf.summary.FileWriter(join(RESULT, "tensorboard"), sess.graph)
 
 if not os.path.isdir(RESULT):
 	os.makedirs(RESULT)
@@ -225,16 +226,15 @@ if is_training:
 			image_path = join(TRAIN_IMAGES, "%d.png" % (ind + 1))
 			real_img = scipy.misc.imread(image_path)
 
-			sess_arr = [g_loss]
+			sess_arr = [g_opt, g_loss, summary]
 			feed_dict = {
 				semantics: semantic_labels,
 				real_image: np.expand_dims(np.float32(real_img), axis=0),
 				lr: 5e-4}
 			run_result = sess.run(sess_arr,	feed_dict=feed_dict)
 
-			# summary_writer.add_summary(run_result[0])
-			g_losses[ind] = run_result[0]
-
+			g_losses[ind] = run_result[1]
+			summary_writer.add_summary(run_result[2])
 			print("Epoch: %d Step: %03d Loss: %.4f %.2f" % (epoch, cnt,
 								   np.mean(g_losses[np.where(g_losses)]),
 								   time.time() - st))
