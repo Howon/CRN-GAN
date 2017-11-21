@@ -11,13 +11,14 @@ from enum import Enum
 from os.path import join
 from helper import Dataset, upscale_semantic, get_semantic_map
 
+
 TRAIN_SEMANTICS = "data/cityscapes/semantics"
 TRAIN_IMAGES = "data/cityscapes/images"
 VALIDATIONS = "data/cityscapes/validations"
-RESULT = "result_{}".format(datetime.now().strftime("%Y_%m_%d_%H"))
+RESULT = "result_{}".format(datetime.now().strftime("%Y_%m_%d"))
 
 NUM_EPOCHS = 600
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 GEN_RES = 256
 
 vgg_layers = scipy.io.loadmat('vgg_model.mat')['layers'][0]
@@ -92,7 +93,7 @@ def recursive_generator(semantics, res):
 		downsampled = tf.image.resize_area(
 			semantics, (res // 2, res), align_corners=False)
 		resz = tf.image.resize_bilinear(
-			recursive_generator(downsampled, res // 2)[0],
+			recursive_generator(downsampled, res // 2),
 			(res, res * 2), align_corners=True)
 		inputs = tf.concat([resz, semantics], 3)
 
@@ -105,15 +106,13 @@ def recursive_generator(semantics, res):
 					  activation_fn=tf.nn.leaky_relu,
 					  scope='g_{}_conv2'.format(res))
 	if res == 256:
-		output = slim.conv2d(net, 3, [1, 1], rate=1, activation_fn=None,
-			  		         scope='g_{}_output'.format(res)) + 255.0 / 2.0
 		net = slim.conv2d(net, 27, [1, 1], rate=1, activation_fn=None,
-						  scope='g_{}_diversity'.format(res))
+						  scope='g_{}_conv100'.format(res))
 		net = (net + 1.0) / 2.0 * 255.0
 		split0, split1, split2 = tf.split(tf.transpose(
 			net, perm=[3, 1, 2, 0]), num_or_size_splits=3, axis=0)
-		return output, tf.concat([split0, split1, split2], 3)
-	return net, None
+		net = tf.concat([split0, split1, split2], 3)
+	return net
 
 
 def error(real, fake, semantics):
@@ -122,9 +121,16 @@ def error(real, fake, semantics):
 	loss = tf.expand_dims(mean, -1)
 	return tf.reduce_mean(semantics * loss, reduction_indices=[1, 2])
 
-if not os.path.isdir(RESULT):
-	print "Result saved to: {}".format(RESULT)
-	os.makedirs(RESULT)
+def stitch_variations(img):
+	upper = np.concatenate(
+		(img[0, :, :, :], img[1, :, :, :], img[2, :, :, :]), axis=1)
+	middle = np.concatenate(
+		(img[3, :, :, :], img[4, :, :, :], img[5, :, :, :]), axis=1)
+	bottom = np.concatenate(
+		(img[6, :, :, :], img[7, :, :, :], img[8, :, :, :]), axis=1)
+
+	sum_img = np.concatenate((upper, middle, bottom), axis=0)
+	return scipy.misc.toimage(sum_img, cmin=0, cmax=255)
 
 sess = tf.Session()
 
@@ -133,11 +139,14 @@ with tf.variable_scope(tf.get_variable_scope()):
 	semantics = tf.placeholder(tf.float32, [None, None, None, 20])
 	real_image = tf.placeholder(tf.float32, [None, None, None, 3])
 
-	generated, diversity = recursive_generator(semantics, GEN_RES)
+	generator = recursive_generator(semantics, GEN_RES)
 
-	vgg_fake = build_vgg19(diversity, reuse=True)
 	vgg_real = build_vgg19(real_image)
+	vgg_fake = build_vgg19(generator, reuse=True)
 
+	# tf.summary.image(name="Generated", tensor=generator)
+	# tf.summary.image(name="Real", tensor=real_image)
+    #
 	p0 = error(vgg_real['input'], vgg_fake['input'], semantics)
 	p1 = error(vgg_real['conv1_2'], vgg_fake['conv1_2'], semantics) / 1.6
 
@@ -155,36 +164,35 @@ with tf.variable_scope(tf.get_variable_scope()):
 
 	content_loss = p0 + p1 + p2 + p3 + p4 + p5
 	loss_min = tf.reduce_min(content_loss, reduction_indices=0)
-	g_loss = tf.reduce_sum(loss_min)
+	g_loss = tf.reduce_sum(tf.reduce_min(content_loss,reduction_indices=0))
 
+	# tf.summary.scalar("P0", tf.reduce_mean(p0))
+	# tf.summary.scalar("P1", tf.reduce_mean(p1))
+	# tf.summary.scalar("P2", tf.reduce_mean(p2))
+	# tf.summary.scalar("P3", tf.reduce_mean(p3))
+	# tf.summary.scalar("P4", tf.reduce_mean(p4))
+	# tf.summary.scalar("P5", tf.reduce_mean(p5))
+    #
+	# tf.summary.scalar("MinLoss", tf.reduce_mean(loss_min))
+	# tf.summary.scalar("Loss", g_loss)
+    #
 lr = tf.placeholder(tf.float32)
 var_list = [v for v in tf.trainable_variables() if v.name.startswith('g_')]
 
 optimizer = tf.train.AdamOptimizer(learning_rate=lr)
 g_opt = optimizer.minimize(g_loss, var_list=var_list)
 saver = tf.train.Saver(max_to_keep=1000)
+#summary = tf.summary.merge_all()
+#summary_writer = tf.summary.FileWriter(join(RESULT, "tensorboard"), sess.graph)
 sess.run(tf.global_variables_initializer())
+
+if not os.path.isdir(RESULT):
+	os.makedirs(RESULT)
 
 ckpt = tf.train.get_checkpoint_state(RESULT)
 if ckpt:
 	print('loaded ' + ckpt.model_checkpoint_path)
 	saver.restore(sess, ckpt.model_checkpoint_path)
-
-def stitch_variations(og, diversity):
-	og_arr = np.minimum(np.maximum(og, 0.0), 255.0)
-
-	img = np.minimum(np.maximum(diversity, 0.0), 255.0)
-	upper = np.concatenate(
-		(img[0, :, :, :], img[1, :, :, :], img[2, :, :, :]), axis=1)
-	middle = np.concatenate(
-		(img[3, :, :, :], img[4, :, :, :], img[5, :, :, :]), axis=1)
-	bottom = np.concatenate(
-		(img[6, :, :, :], img[7, :, :, :], img[8, :, :, :]), axis=1)
-	sum_img = np.concatenate((upper, middle, bottom), axis=0)
-	raw_img = scipy.misc.toimage(og_arr[0, :, :, :], cmin=0, cmax=255)
-
-	return raw_img, scipy.misc.toimage(sum_img, cmin=0, cmax=255)
-
 
 vals = [join(VALIDATIONS, p) for p in os.listdir(VALIDATIONS)]
 val_images = [upscale_semantic(get_semantic_map(palette, v)) for v in vals]
@@ -221,27 +229,28 @@ if is_training:
 			feed_dict = {
 				semantics: semantic_labels,
 				real_image: np.expand_dims(np.float32(real_img), axis=0),
-				lr: 1e-3}
+				lr: 5e-4}
 			run_result = sess.run(sess_arr,	feed_dict=feed_dict)
 
-			# _, G_current, l0, l1, l2, l3, l4, l5
+			# summary_writer.add_summary(run_result[0])
 			g_losses[ind] = run_result[0]
 
 			print("Epoch: %d Step: %03d Loss: %.4f %.2f" % (epoch, cnt,
 								   np.mean(g_losses[np.where(g_losses)]),
 								   time.time() - st))
 
-		saver.save(sess, join(epoch_res_dir, "model.ckpt"))
+		print "Saving model to {}".format(join(epoch_res_dir, "model.ckpt"))
+		saver.save(sess, join(RESULT, "model.ckpt"))
 
 		target = open(join(epoch_res_dir, "score.txt"), 'w')
 		target.write("%f" % np.mean(g_losses[np.where(g_losses)]))
 		target.close()
 
 		for ind, v in enumerate(val_images):
-			res = sess.run([generated, diversity], feed_dict={semantics: v})
-			og, stitched = stitch_variations(res[0], res[1])
-			og.save(join(epoch_res_dir, "%06d_output.jpg" % ind))
-			stitched.save(join(epoch_res_dir, "%06d_variation.jpg" % ind))
+			output = sess.run(generator, feed_dict={semantics: v})
+			output = np.minimum(np.maximum(output, 0.0), 255.0)
+			stitched = stitch_variations(output)
+			stitched.save(join(epoch_res_dir, "%06d_output.jpg" % ind))
 
 		print "Epoch {} Took {} Seconds".format(epoch, time.time() - e_start)
 		print "====================\n"
@@ -251,8 +260,7 @@ if not os.path.isdir(final_dir):
 	os.makedirs(final_dir)
 
 for ind, v in enumerate(val_images):
-	res = sess.run([generated, diversity], feed_dict={semantics: v})
-	og, stitched = stitch_variations(res[0], res[1])
-	og.save(join(final_dir, "%06d_output.jpg" % ind))
-	stitched.save(join(final_dir, "%06d_variation.jpg" % ind))
-
+	output = sess.run(generator, feed_dict={semantics: v})
+	output = np.minimum(np.maximum(output, 0.0), 255.0)
+	stitched = stitch_variations(output)
+	stitched.save(join(final_dir, "%06d_output.jpg" % ind))
