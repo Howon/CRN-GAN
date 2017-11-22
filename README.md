@@ -1,10 +1,9 @@
-Barbara Zhan  bz2310 
-
-Pooja Kathail   pk2485
-
+## Contributors
+Barbara Zhan  bz2310 <br>
+Pooja Kathail   pk2485 <br>
 Howon Byun   hb2458
 
-## Data
+## Instruction
 First run 
 ```
 python download_models.py
