@@ -35,7 +35,7 @@ python crn.py
 [Pix2Pix Tensorflow Implementation](https://github.com/affinelayer/pix2pix-tensorflow)
 
 
-## Result
+## Milestone 1
 For milestone 1, we focused mostly on getting both Cascading Refinement Networks(CRN) and Pix2Pix to work. Pix2Pix seemed to behave fine out of the box but CRN had a lot of issues, including but not limited to:
 1. Lack of documentation.
 2. Incorrect naming schemes/output structure.
@@ -49,13 +49,24 @@ Here are some of the images so far. Notice that since the original CRN used dive
 the minimum variation across variadic output channels, each image consists of 9 panels.
 
 Semantics <br>
-![input_semantics](./doc/semantics.png)
+![input_semantics](./doc/images/semantics.png)
 
 Epoch 20 <br>
-![epoch_20](./doc/epoch_20.jpg)
+![epoch_20](./doc/images/epoch_20.jpg)
 
 Epoch 50 <br>
-![epoch_50](./doc/epoch_50.jpg)
+![epoch_50](./doc/images/epoch_50.jpg)
 
 Epoch 76 (3.5 hours) <br>
-![epoch_76](./doc/epoch_76.jpg)
+![epoch_76](./doc/images/epoch_76.jpg)
+
+Tensorboard Outputs
+
+Scalar Plots <br>
+![scalars](./doc/tensorboard/scalars.png)
+
+Images. Note that there are 9 "fake" images generated for diversity loss calculation<br>
+![images](./doc/tensorboard/images.png)
+
+Computation Graph. <br>
+![graph](./doc/tensorboard/graph.png)
