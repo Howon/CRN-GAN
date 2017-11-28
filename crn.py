@@ -39,6 +39,7 @@ class NType(Enum):
 	C = 0
 	P = 1
 
+
 def build_net(ntype, nin, idx=-1, name=None):
 	if ntype == NType.C:
 		conv = tf.nn.conv2d(input=nin, filter=vgg_weights[idx],
@@ -118,6 +119,7 @@ def error(real, fake, semantics):
 	mean = tf.reduce_mean(tf.abs(fake - real), reduction_indices=[3])
 	loss = tf.expand_dims(mean, -1)
 	return tf.reduce_mean(semantics * loss, reduction_indices=[1, 2])
+
 
 def stitch_variations(img):
 	upper = np.concatenate(
