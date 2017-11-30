@@ -136,7 +136,7 @@ sess = tf.Session()
 
 is_training = True
 with tf.variable_scope(tf.get_variable_scope()):
-	semantics = tf.placeholder(tf.float32, [None, None, None, 20])
+	semantics = tf.placeholder(tf.float32, [None, None, None, 3])
 	real_image = tf.placeholder(tf.float32, [None, None, None, 3])
 
 	generator = recursive_generator(semantics, GEN_RES)
@@ -198,7 +198,7 @@ if ckpt:
 	saver.restore(sess, ckpt.model_checkpoint_path)
 
 vals = [join(VALIDATIONS, p) for p in os.listdir(VALIDATIONS)]
-val_images = [upscale_semantic(get_semantic_map(palette, v)) for v in vals]
+val_images = [np.expand_dims(np.float32(scipy.misc.imread(v)), axis=0) for v in vals]
 
 if is_training:
 	input_size = len(os.listdir(TRAIN_IMAGES))
@@ -221,16 +221,17 @@ if is_training:
 
 			if not os.path.isfile(semantics_path):
 				continue
-			semantic_labels = upscale_semantic(
-				get_semantic_map(palette, semantics_path))
-
+			# semantic_labels = upscale_semantic(
+			# 	get_semantic_map(palette, semantics_path))
+            #
 			# training image
 			image_path = join(TRAIN_IMAGES, "%d.png" % (ind + 1))
+			semantics_img = scipy.misc.imread(semantics_path)
 			real_img = scipy.misc.imread(image_path)
-
+			# print real_img.shape
 			sess_arr = [g_opt, g_loss, summary]
 			feed_dict = {
-				semantics: semantic_labels,
+				semantics: np.expand_dims(np.float32(semantics_img), axis=0),
 				real_image: np.expand_dims(np.float32(real_img), axis=0),
 				lr: 5e-4}
 			run_result = sess.run(sess_arr,	feed_dict=feed_dict)

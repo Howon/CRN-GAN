@@ -12,6 +12,7 @@ class Dataset(object):
 
 def get_semantic_map(palette, path):
 	semantic = scipy.misc.imread(path)
+	print semantic.shape
 	tmp = np.zeros((semantic.shape[0], semantic.shape[1], palette.shape[0]), dtype=np.float32)
 
 	for k in range(palette.shape[0]):
