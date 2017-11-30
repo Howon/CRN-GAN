@@ -127,7 +127,7 @@ def load_examples():
 		raise Exception("input_dir does not exist")
 
 	input_paths = glob.glob(os.path.join(a.input_dir, "*.png"))
-	decode = tf.image.decode_png
+	decode = tf.image.decode_jpeg
 
 	if len(input_paths) == 0:
 		raise Exception("input_dir contains no image files")
@@ -144,7 +144,7 @@ def load_examples():
 		input_paths = sorted(input_paths)
 
 	with tf.name_scope("load_images"):
-		input_queue = tf.train.input_producer(input_paths, shuffle= a.mode == "train")
+		path_queue = tf.train.input_producer(input_paths, shuffle= a.mode == "train")
 
 		reader = tf.WholeFileReader()
 		paths, contents = reader.read(path_queue)
@@ -158,7 +158,7 @@ def load_examples():
 		raw_input.set_shape([None, None, 3])
 
 		# break apart image pair and move to range [-1, 1]
-		# width = tf.shape(raw_input)[1] # [height, width, channels]
+		width = tf.shape(raw_input)[1] # [height, width, channels]
 		inputs = preprocess(raw_input[:,width//2:,:])
 		targets = preprocess(raw_input[:,:width//2,:])
 
@@ -173,18 +173,19 @@ def load_examples():
 	"""
 	def transform(image):
 		r = image
+		print(r.shape)
 		if a.flip:
 			r = tf.image.random_flip_left_right(r, seed=seed)
 
 		# area produces a nice downscaling, but does nearest neighbor for upscaling
 		# assume we're going to be doing downscaling here
 		r = tf.image.resize_images(r, [a.scale_size, 2 * a.scale_size], method=tf.image.ResizeMethod.AREA)
-
 		offset = tf.cast(tf.floor(tf.random_uniform([2], 0, a.scale_size - CROP_SIZE + 1, seed=seed)), dtype=tf.int32)
-		# if a.scale_size > CROP_SIZE:
+		#if a.scale_size > CROP_SIZE:
 		r = tf.image.crop_to_bounding_box(r, offset[0], offset[1], CROP_SIZE, 2 * CROP_SIZE)
-		# elif a.scale_size < CROP_SIZE:
-		# 	raise Exception("scale size cannot be less than crop size")
+		#elif a.scale_size < CROP_SIZE:
+		#raise Exception("scale size cannot be less than crop size")
+		print(r.shape)
 		return r
 
 	with tf.name_scope("input_images"):
@@ -352,6 +353,7 @@ def create_model(inputs, targets):
 	ema = tf.train.ExponentialMovingAverage(decay=0.99)
 	update_losses = ema.apply([discrim_loss, gen_loss_GAN, gen_loss_L1])
 
+	# global_step = tf.train.get_or_create_global_step()
 	global_step = tf.contrib.framework.get_or_create_global_step()
 	incr_global_step = tf.assign(global_step, global_step+1)
 
