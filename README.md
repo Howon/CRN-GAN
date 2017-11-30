@@ -44,7 +44,7 @@ For milestone 1, we focused mostly on getting both Cascading Refinement Networks
 5. Undocumented interlop with Matlab code used for image processing.
 
 Once we managed to clean up the code, we attached TensorBoard and started training the model.
-There was an issue where the GPU we are using (1080Ti) could not fit the larger resolution networks in memory so for the sake of the milestone submission we trained the lowest resolution (256 x 512) network. 
+There was an issue where the GPU we are using (1080Ti) could not fit the larger resolution networks in memory so for the sake of the milestone submission we trained the lowest resolution (256 x 512) network.
 Here are some of the images so far. Notice that since the original CRN used diversity loss to compute
 the minimum variation across variadic output channels, each image consists of 9 panels.
 

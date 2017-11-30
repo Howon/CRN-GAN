@@ -159,14 +159,18 @@ def load_examples():
 
 		# break apart image pair and move to range [-1, 1]
 		# width = tf.shape(raw_input)[1] # [height, width, channels]
-		# a_images = preprocess(raw_input[:,:width//2,:])
-		# b_images = preprocess(raw_input[:,width//2:,:])
-
-	inputs, targets = [b_images, a_images]
+		inputs = preprocess(raw_input[:,width//2:,:])
+		targets = preprocess(raw_input[:,:width//2,:])
 
 	# synchronize seed for image operations so that we do the same operations to both
 	# input and output images
 	seed = random.randint(0, 2**31 - 1)
+
+	"""
+	POOJA:
+	Modify the below transform function ot use aspect ratio of 256 x 512.
+	Might not have to but just to be safe.
+	"""
 	def transform(image):
 		r = image
 		if a.flip:
