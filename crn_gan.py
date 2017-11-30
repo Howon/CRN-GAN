@@ -42,7 +42,6 @@ parser.add_argument("--gan_weight", type=float, default=1.0, help="weight on GAN
 
 a = parser.parse_args()
 
-
 EPS = 1e-12
 CROP_SIZE = 256
 
@@ -175,13 +174,13 @@ def load_examples():
 
 		# area produces a nice downscaling, but does nearest neighbor for upscaling
 		# assume we're going to be doing downscaling here
-		r = tf.image.resize_images(r, [a.scale_size, a.scale_size], method=tf.image.ResizeMethod.AREA)
+		r = tf.image.resize_images(r, [a.scale_size, 2 * a.scale_size], method=tf.image.ResizeMethod.AREA)
 
 		offset = tf.cast(tf.floor(tf.random_uniform([2], 0, a.scale_size - CROP_SIZE + 1, seed=seed)), dtype=tf.int32)
-		if a.scale_size > CROP_SIZE:
-			r = tf.image.crop_to_bounding_box(r, offset[0], offset[1], CROP_SIZE, CROP_SIZE)
-		elif a.scale_size < CROP_SIZE:
-			raise Exception("scale size cannot be less than crop size")
+		# if a.scale_size > CROP_SIZE:
+		r = tf.image.crop_to_bounding_box(r, offset[0], offset[1], CROP_SIZE, 2 * CROP_SIZE)
+		# elif a.scale_size < CROP_SIZE:
+		# 	raise Exception("scale size cannot be less than crop size")
 		return r
 
 	with tf.name_scope("input_images"):
