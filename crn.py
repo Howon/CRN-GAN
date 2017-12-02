@@ -96,42 +96,66 @@ def recursive_generator(semantics, res):
 			(res, res * 2), align_corners=True)
 		inputs = tf.concat([resz, semantics], 3)
 
-	net = slim.conv2d(inputs, dim, [3, 3], rate=1,
+	with tf.variable_scope("casecade_" + str(res)):
+		# net = conv(inputs, out_channels=dim, kernel_size=4, scope="conv1")
+		# net = conv(net, out_channels=dim, kernel_size=4, scope="conv2")
+        #
+		net = slim.conv2d(inputs, dim, [3, 3], rate=1,
 					  normalizer_fn=slim.layer_norm,
 					  activation_fn=tf.nn.leaky_relu,
-					  scope='g_{}_conv1'.format(res))
-	net = slim.conv2d(net, dim, [3, 3], rate=1,
+					  scope='conv1_{}'.format(res))
+		net = slim.conv2d(net, dim, [3, 3], rate=1,
 					  normalizer_fn=slim.layer_norm,
 					  activation_fn=tf.nn.leaky_relu,
-					  scope='g_{}_conv2'.format(res))
+					  scope='conv2_{}'.format(res))
+
 	if res == 256:
-		net = slim.conv2d(net, 27, [1, 1], rate=1, activation_fn=None,
-						  scope='g_{}_conv100'.format(res))
-		net = (net + 1.0) / 2.0 * 255.0
-		split0, split1, split2 = tf.split(tf.transpose(
-			net, perm=[3, 1, 2, 0]), num_or_size_splits=3, axis=0)
-		net = tf.concat([split0, split1, split2], 3)
-	return net
+		with tf.variable_scope("final_gen"):
+			# net = tf.tanh(conv(net, out_channels=3, kernel_size=1))
+			net = slim.conv2d(net, 3, [1, 1], rate=1, activation_fn=None,
+							  scope='conv_final')
+			return (net + 1.0) / 2.0 * 255.0
+    #
+	# net = slim.conv2d(inputs, dim, [3, 3], rate=1,
+	# 				  normalizer_fn=slim.layer_norm,
+	# 				  activation_fn=tf.nn.leaky_relu,
+	# 				  scope='g_{}_conv1'.format(res))
+	# net = slim.conv2d(net, dim, [3, 3], rate=1,
+	# 				  normalizer_fn=slim.layer_norm,
+	# 				  activation_fn=tf.nn.leaky_relu,
+	# 				  scope='g_{}_conv2'.format(res))
+	# if res == 256:
+	# 	net = slim.conv2d(net, 3, [1, 1], rate=1, activation_fn=None,
+	# 					  scope='g_{}_conv100'.format(res))
+    #
+	# 	# net = slim.conv2d(net, 27, [1, 1], rate=1, activation_fn=None,
+	# 	# 				  scope='g_{}_conv100'.format(res))
+	# 	net = (net + 1.0) / 2.0 * 255.0
+	# 	# split0, split1, split2 = tf.split(tf.transpose(
+	# 	# 	net, perm=[3, 1, 2, 0]), num_or_size_splits=3, axis=0)
+	# 	# net = tf.concat([split0, split1, split2], 3)
+	return tf.tanh(net)
 
 
 def error(real, fake, semantics):
-	# diversity loss
-	mean = tf.reduce_mean(tf.abs(fake - real), reduction_indices=[3])
-	loss = tf.expand_dims(mean, -1)
-	return tf.reduce_mean(semantics * loss, reduction_indices=[1, 2])
-
+	return tf.reduce_mean(tf.abs(fake-real))
+	# # diversity loss
+	# mean = tf.reduce_mean(tf.abs(fake - real), reduction_indices=[3])
+	# loss = tf.expand_dims(mean, -1)
+	# return tf.reduce_mean(semantics * loss, reduction_indices=[1, 2])
+    #
 
 def stitch_variations(img):
-	upper = np.concatenate(
-		(img[0, :, :, :], img[1, :, :, :], img[2, :, :, :]), axis=1)
-	middle = np.concatenate(
-		(img[3, :, :, :], img[4, :, :, :], img[5, :, :, :]), axis=1)
-	bottom = np.concatenate(
-		(img[6, :, :, :], img[7, :, :, :], img[8, :, :, :]), axis=1)
-
-	sum_img = np.concatenate((upper, middle, bottom), axis=0)
-	return scipy.misc.toimage(sum_img, cmin=0, cmax=255)
-
+	# upper = np.concatenate(
+	# 	(img[0, :, :, :], img[1, :, :, :], img[2, :, :, :]), axis=1)
+	# middle = np.concatenate(
+	# 	(img[3, :, :, :], img[4, :, :, :], img[5, :, :, :]), axis=1)
+	# bottom = np.concatenate(
+	# 	(img[6, :, :, :], img[7, :, :, :], img[8, :, :, :]), axis=1)
+    #
+	# sum_img = np.concatenate((upper, middle, bottom), axis=0)
+	# return scipy.misc.toimage(sum_img, cmin=0, cmax=255)
+	return scipy.misc.toimage(img[0,:,:,:], cmin=0, cmax=255)
 sess = tf.Session()
 
 is_training = True
@@ -141,8 +165,7 @@ with tf.variable_scope(tf.get_variable_scope()):
 
 	generator = recursive_generator(semantics, GEN_RES)
 
-	tf.summary.image(name="Generated", tensor=generator,
-					 max_outputs=generator.shape[0])
+	tf.summary.image(name="Generated", tensor=generator)
 	tf.summary.image(name="Real", tensor=real_image)
 
 	vgg_real = build_vgg19(real_image)
@@ -163,10 +186,11 @@ with tf.variable_scope(tf.get_variable_scope()):
 	resized = tf.image.resize_area(semantics, (GEN_RES // 16, GEN_RES // 8))
 	p5 = error(vgg_real['conv5_2'], vgg_fake['conv5_2'], resized) * 10 / 0.8
 
-	content_loss = p0 + p1 + p2 + p3 + p4 + p5
-	loss_min = tf.reduce_min(content_loss, reduction_indices=0)
-	loss_mean = tf.reduce_mean(content_loss, reduction_indices=0)
-	g_loss = tf.reduce_sum(loss_min) * 0.999 + tf.reduce_sum(loss_mean) * 0.001
+	# content_loss = p0 + p1 + p2 + p3 + p4 + p5
+	# loss_min = tf.reduce_min(content_loss, reduction_indices=0)
+	# loss_mean = tf.reduce_mean(content_loss, reduction_indices=0)
+	# g_loss = tf.reduce_sum(loss_min) * 0.999 + tf.reduce_sum(loss_mean) * 0.001
+	g_loss = p0 + p1 + p2 + p3 + p4 + p5
 
 	tf.summary.scalar("P0", tf.reduce_mean(p0))
 	tf.summary.scalar("P1", tf.reduce_mean(p1))
@@ -178,11 +202,9 @@ with tf.variable_scope(tf.get_variable_scope()):
 	tf.summary.scalar("Loss", g_loss)
 
 lr = tf.placeholder(tf.float32)
-var_list = [v for v in tf.trainable_variables() if v.name.startswith('g_')]
 
 optimizer = tf.train.AdamOptimizer(learning_rate=lr)
-tf.summary.scalar("LearningRate", optimizer._lr)
-g_opt = optimizer.minimize(g_loss, var_list=var_list,
+g_opt = optimizer.minimize(g_loss,
 						   global_step=tf.train.get_global_step())
 saver = tf.train.Saver(max_to_keep=1000)
 sess.run(tf.global_variables_initializer())

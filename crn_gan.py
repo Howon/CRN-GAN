@@ -12,6 +12,7 @@ import random
 import collections
 import math
 import time
+import tensorflow.contrib.slim as slim
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--input_dir", help="path to folder containing images")
@@ -61,10 +62,13 @@ def deprocess(image):
 		return (image + 1) / 2
 
 
-def conv(batch_input, out_channels, stride):
-	with tf.variable_scope("conv"):
+def conv(batch_input, out_channels, kernel_size=4, stride=1, scope="conv"):
+	with tf.variable_scope(scope):
 		in_channels = batch_input.get_shape()[3]
-		filter = tf.get_variable("filter", [4, 4, in_channels, out_channels], dtype=tf.float32, initializer=tf.random_normal_initializer(0, 0.02))
+		filter = tf.get_variable("filter",
+						   [kernel_size, kernel_size, in_channels, out_channels],
+						   dtype=tf.float32,
+						   initializer=tf.random_normal_initializer(0, 0.02))
 		# [batch, in_height, in_width, in_channels], [filter_width, filter_height, in_channels, out_channels]
 		#	 => [batch, out_height, out_width, out_channels]
 		padded_input = tf.pad(batch_input, [[0, 0], [1, 1], [1, 1], [0, 0]], mode="CONSTANT")
@@ -126,8 +130,11 @@ def load_examples():
 	if a.input_dir is None or not os.path.exists(a.input_dir):
 		raise Exception("input_dir does not exist")
 
-	input_paths = glob.glob(os.path.join(a.input_dir, "*.png"))
+	input_paths = glob.glob(os.path.join(a.input_dir, "*.jpg"))
 	decode = tf.image.decode_jpeg
+	if len(input_paths) == 0:
+		input_paths = glob.glob(os.path.join(a.input_dir, "*.png"))
+		decode = tf.image.decode_png
 
 	if len(input_paths) == 0:
 		raise Exception("input_dir contains no image files")
@@ -159,8 +166,8 @@ def load_examples():
 
 		# break apart image pair and move to range [-1, 1]
 		width = tf.shape(raw_input)[1] # [height, width, channels]
-		inputs = preprocess(raw_input[:,width//2:,:])
-		targets = preprocess(raw_input[:,:width//2,:])
+		targets = preprocess(raw_input[:,width//2:,:])
+		inputs = preprocess(raw_input[:,:width//2,:])
 
 	# synchronize seed for image operations so that we do the same operations to both
 	# input and output images
@@ -206,72 +213,102 @@ def load_examples():
 	)
 
 
-def create_generator(generator_inputs, generator_outputs_channels):
-	layers = []
+def create_generator(semantics, res):#generator_outputs_channels):
+	dim = 512 if res >= 128 else 1024
 
-	# encoder_1: [batch, 256, 256, in_channels] => [batch, 128, 128, ngf]
-	with tf.variable_scope("encoder_1"):
-		output = conv(generator_inputs, a.ngf, stride=2)
-		layers.append(output)
+	if res == 4:
+		inputs = semantics
+	else:
+		downsampled = tf.image.resize_area(
+			semantics, (res // 2, res), align_corners=False)
+		resz = tf.image.resize_bilinear(
+			create_generator(downsampled, res // 2),
+			(res, res * 2), align_corners=True)
+		inputs = tf.concat([resz, semantics], 3)
 
-	layer_specs = [
-		a.ngf * 2, # encoder_2: [batch, 128, 128, ngf] => [batch, 64, 64, ngf * 2]
-		a.ngf * 4, # encoder_3: [batch, 64, 64, ngf * 2] => [batch, 32, 32, ngf * 4]
-		a.ngf * 8, # encoder_4: [batch, 32, 32, ngf * 4] => [batch, 16, 16, ngf * 8]
-		a.ngf * 8, # encoder_5: [batch, 16, 16, ngf * 8] => [batch, 8, 8, ngf * 8]
-		a.ngf * 8, # encoder_6: [batch, 8, 8, ngf * 8] => [batch, 4, 4, ngf * 8]
-		a.ngf * 8, # encoder_7: [batch, 4, 4, ngf * 8] => [batch, 2, 2, ngf * 8]
-		a.ngf * 8, # encoder_8: [batch, 2, 2, ngf * 8] => [batch, 1, 1, ngf * 8]
-	]
+	net = slim.conv2d(inputs, dim, [3, 3], rate=1,
+				  normalizer_fn=slim.layer_norm,
+				  activation_fn=tf.nn.leaky_relu,
+				  scope='conv1_{}'.format(res))
+	net = slim.conv2d(net, dim, [3, 3], rate=1,
+				  normalizer_fn=slim.layer_norm,
+				  activation_fn=tf.nn.leaky_relu,
+				  scope='conv2_{}'.format(res))
 
-	for out_channels in layer_specs:
-		with tf.variable_scope("encoder_%d" % (len(layers) + 1)):
-			rectified = lrelu(layers[-1], 0.2)
-			# [batch, in_height, in_width, in_channels] => [batch, in_height/2, in_width/2, out_channels]
-			convolved = conv(rectified, out_channels, stride=2)
-			output = batchnorm(convolved)
-			layers.append(output)
+	if res == 256:
+		# net = tf.tanh(conv(net, out_channels=3, kernel_size=1))
+		net = slim.conv2d(net, 3, [1, 1], rate=1, activation_fn=None,
+						  scope='conv_final')
+		net = (net + 1.0) / 2.0 * 255.0
 
-	layer_specs = [
-		(a.ngf * 8, 0.5),   # decoder_8: [batch, 1, 1, ngf * 8] => [batch, 2, 2, ngf * 8 * 2]
-		(a.ngf * 8, 0.5),   # decoder_7: [batch, 2, 2, ngf * 8 * 2] => [batch, 4, 4, ngf * 8 * 2]
-		(a.ngf * 8, 0.5),   # decoder_6: [batch, 4, 4, ngf * 8 * 2] => [batch, 8, 8, ngf * 8 * 2]
-		(a.ngf * 8, 0.0),   # decoder_5: [batch, 8, 8, ngf * 8 * 2] => [batch, 16, 16, ngf * 8 * 2]
-		(a.ngf * 4, 0.0),   # decoder_4: [batch, 16, 16, ngf * 8 * 2] => [batch, 32, 32, ngf * 4 * 2]
-		(a.ngf * 2, 0.0),   # decoder_3: [batch, 32, 32, ngf * 4 * 2] => [batch, 64, 64, ngf * 2 * 2]
-		(a.ngf, 0.0),	   # decoder_2: [batch, 64, 64, ngf * 2 * 2] => [batch, 128, 128, ngf * 2]
-	]
+	return net
 
-	num_encoder_layers = len(layers)
-	for decoder_layer, (out_channels, dropout) in enumerate(layer_specs):
-		skip_layer = num_encoder_layers - decoder_layer - 1
-		with tf.variable_scope("decoder_%d" % (skip_layer + 1)):
-			if decoder_layer == 0:
-				# first decoder layer doesn't have skip connections
-				# since it is directly connected to the skip_layer
-				input = layers[-1]
-			else:
-				input = tf.concat([layers[-1], layers[skip_layer]], axis=3)
 
-			rectified = tf.nn.relu(input)
-			# [batch, in_height, in_width, in_channels] => [batch, in_height*2, in_width*2, out_channels]
-			output = deconv(rectified, out_channels)
-			output = batchnorm(output)
-
-			if dropout > 0.0:
-				output = tf.nn.dropout(output, keep_prob=1 - dropout)
-
-			layers.append(output)
-
-	# decoder_1: [batch, 128, 128, ngf * 2] => [batch, 256, 256, generator_outputs_channels]
-	with tf.variable_scope("decoder_1"):
-		input = tf.concat([layers[-1], layers[0]], axis=3)
-		rectified = tf.nn.relu(input)
-		output = deconv(rectified, generator_outputs_channels)
-		output = tf.tanh(output)
-		layers.append(output)
-
-	return layers[-1]
+	# layers = []
+    #
+	# # encoder_1: [batch, 256, 256, in_channels] => [batch, 128, 128, ngf]
+	# with tf.variable_scope("encoder_1"):
+	# 	output = conv(generator_inputs, a.ngf, stride=2)
+	# 	layers.append(output)
+    #
+	# layer_specs = [
+	# 	a.ngf * 2, # encoder_2: [batch, 128, 128, ngf] => [batch, 64, 64, ngf * 2]
+	# 	a.ngf * 4, # encoder_3: [batch, 64, 64, ngf * 2] => [batch, 32, 32, ngf * 4]
+	# 	a.ngf * 8, # encoder_4: [batch, 32, 32, ngf * 4] => [batch, 16, 16, ngf * 8]
+	# 	a.ngf * 8, # encoder_5: [batch, 16, 16, ngf * 8] => [batch, 8, 8, ngf * 8]
+	# 	a.ngf * 8, # encoder_6: [batch, 8, 8, ngf * 8] => [batch, 4, 4, ngf * 8]
+	# 	a.ngf * 8, # encoder_7: [batch, 4, 4, ngf * 8] => [batch, 2, 2, ngf * 8]
+	# 	a.ngf * 8, # encoder_8: [batch, 2, 2, ngf * 8] => [batch, 1, 1, ngf * 8]
+	# ]
+    #
+	# for out_channels in layer_specs:
+	# 	with tf.variable_scope("encoder_%d" % (len(layers) + 1)):
+	# 		rectified = lrelu(layers[-1], 0.2)
+	# 		# [batch, in_height, in_width, in_channels] => [batch, in_height/2, in_width/2, out_channels]
+	# 		convolved = conv(rectified, out_channels, stride=2)
+	# 		output = batchnorm(convolved)
+	# 		layers.append(output)
+    #
+	# layer_specs = [
+	# 	(a.ngf * 8, 0.5),   # decoder_8: [batch, 1, 1, ngf * 8] => [batch, 2, 2, ngf * 8 * 2]
+	# 	(a.ngf * 8, 0.5),   # decoder_7: [batch, 2, 2, ngf * 8 * 2] => [batch, 4, 4, ngf * 8 * 2]
+	# 	(a.ngf * 8, 0.5),   # decoder_6: [batch, 4, 4, ngf * 8 * 2] => [batch, 8, 8, ngf * 8 * 2]
+	# 	(a.ngf * 8, 0.0),   # decoder_5: [batch, 8, 8, ngf * 8 * 2] => [batch, 16, 16, ngf * 8 * 2]
+	# 	(a.ngf * 4, 0.0),   # decoder_4: [batch, 16, 16, ngf * 8 * 2] => [batch, 32, 32, ngf * 4 * 2]
+	# 	(a.ngf * 2, 0.0),   # decoder_3: [batch, 32, 32, ngf * 4 * 2] => [batch, 64, 64, ngf * 2 * 2]
+	# 	(a.ngf, 0.0),	   # decoder_2: [batch, 64, 64, ngf * 2 * 2] => [batch, 128, 128, ngf * 2]
+	# ]
+    #
+	# num_encoder_layers = len(layers)
+	# for decoder_layer, (out_channels, dropout) in enumerate(layer_specs):
+	# 	skip_layer = num_encoder_layers - decoder_layer - 1
+	# 	with tf.variable_scope("decoder_%d" % (skip_layer + 1)):
+	# 		if decoder_layer == 0:
+	# 			# first decoder layer doesn't have skip connections
+	# 			# since it is directly connected to the skip_layer
+	# 			input = layers[-1]
+	# 		else:
+	# 			input = tf.concat([layers[-1], layers[skip_layer]], axis=3)
+    #
+	# 		rectified = tf.nn.relu(input)
+	# 		# [batch, in_height, in_width, in_channels] => [batch, in_height*2, in_width*2, out_channels]
+	# 		output = deconv(rectified, out_channels)
+	# 		output = batchnorm(output)
+    #
+	# 		if dropout > 0.0:
+	# 			output = tf.nn.dropout(output, keep_prob=1 - dropout)
+    #
+	# 		layers.append(output)
+    #
+	# # decoder_1: [batch, 128, 128, ngf * 2] => [batch, 256, 256, generator_outputs_channels]
+	# with tf.variable_scope("decoder_1"):
+	# 	input = tf.concat([layers[-1], layers[0]], axis=3)
+	# 	rectified = tf.nn.relu(input)
+	# 	output = deconv(rectified, generator_outputs_channels)
+	# 	output = tf.tanh(output)
+	# 	layers.append(output)
+    #
+	# return layers[-1]
 
 
 def create_model(inputs, targets):
@@ -310,7 +347,8 @@ def create_model(inputs, targets):
 
 	with tf.variable_scope("generator") as scope:
 		out_channels = int(targets.get_shape()[-1])
-		outputs = create_generator(inputs, out_channels)
+		outputs = create_generator(inputs, CROP_SIZE)#out_channels)
+
 
 	# create two copies of discriminator, one for real pairs and one for fake pairs
 	# they share the same underlying variables
