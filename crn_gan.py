@@ -226,22 +226,25 @@ def create_generator(semantics, res):#generator_outputs_channels):
 			(res, res * 2), align_corners=True)
 		inputs = tf.concat([resz, semantics], 3)
 
-	net = slim.conv2d(inputs, dim, [3, 3], rate=1,
-				  normalizer_fn=slim.layer_norm,
-				  activation_fn=tf.nn.leaky_relu,
-				  scope='conv1_{}'.format(res))
-	net = slim.conv2d(net, dim, [3, 3], rate=1,
-				  normalizer_fn=slim.layer_norm,
-				  activation_fn=tf.nn.leaky_relu,
-				  scope='conv2_{}'.format(res))
+	with tf.variable_scope("casecade_" + str(res)):
+		# net = conv(inputs, out_channels=dim, kernel_size=4, scope="conv1")
+		# net = conv(net, out_channels=dim, kernel_size=4, scope="conv2")
+        #
+		net = slim.conv2d(inputs, dim, [3, 3], rate=1,
+					  normalizer_fn=slim.layer_norm,
+					  activation_fn=tf.nn.leaky_relu,
+					  scope='conv1_{}'.format(res))
+		net = slim.conv2d(net, dim, [3, 3], rate=1,
+					  normalizer_fn=slim.layer_norm,
+					  activation_fn=tf.nn.leaky_relu,
+					  scope='conv2_{}'.format(res))
 
 	if res == 256:
-		# net = tf.tanh(conv(net, out_channels=3, kernel_size=1))
-		net = slim.conv2d(net, 3, [1, 1], rate=1, activation_fn=None,
-						  scope='conv_final')
-		net = (net + 1.0) / 2.0 * 255.0
-
-	return net
+		with tf.variable_scope("final_gen"):
+			# net = tf.tanh(conv(net, out_channels=3, kernel_size=1))
+			net = slim.conv2d(net, 3, [1, 1], rate=1, activation_fn=None,
+							  scope='conv_final')
+	return tf.layers.batch_normalization(net)
 
 
 	# layers = []
